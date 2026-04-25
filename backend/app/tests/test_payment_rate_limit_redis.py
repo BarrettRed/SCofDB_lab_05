@@ -29,7 +29,6 @@ async def test_payment_endpoint_rate_limit():
     """
     from app.main import app
 
-    # Создаём тестовый заказ
     user_id = uuid.uuid4()
     order_id = uuid.uuid4()
 
@@ -48,16 +47,15 @@ async def test_payment_endpoint_rate_limit():
                 {"order_id": str(order_id)},
             )
 
-    # Очищаем Redis ключ rate limit перед тестом
     redis = get_redis()
     await redis.delete(f"rate_limit:pay:testclient")
 
     transport = ASGITransport(app=app)
-    limit = 5  # должно совпадать с limit_per_window в RateLimitMiddleware
+    limit = 5 
 
     results = []
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        for i in range(limit + 3):  # отправляем больше чем лимит
+        for i in range(limit + 3):  
             resp = await client.post(
                 "/api/payments/retry-demo",
                 json={"order_id": str(order_id), "mode": "unsafe"},
@@ -72,18 +70,16 @@ async def test_payment_endpoint_rate_limit():
     passed = [r for r in results if r["status_code"] != 429]
     rejected = [r for r in results if r["status_code"] == 429]
 
-    print(f"\n🚦 RATE LIMIT TEST:")
+    print(f"\nRATE LIMIT TEST:")
     for r in results:
-        status = "✅" if r["status_code"] != 429 else "❌ 429"
+        status = "OK" if r["status_code"] != 429 else "429"
         print(f"  Попытка {r['attempt']}: {status} | remaining={r['remaining']} | limit={r['limit']}")
     print(f"\nПрошло: {len(passed)}, отклонено: {len(rejected)}")
 
-    # Проверки
     assert len(passed) <= limit, f"Должно пройти не более {limit} запросов"
     assert len(rejected) >= 1, "Хотя бы один запрос должен получить 429"
     assert results[0]["limit"] == str(limit), "Заголовок X-RateLimit-Limit должен быть установлен"
 
-    # Очистка
     async with AsyncSessionLocal() as session:
         async with session.begin():
             await session.execute(text("DELETE FROM order_status_history WHERE order_id = :id"), {"id": str(order_id)})

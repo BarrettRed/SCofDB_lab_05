@@ -14,7 +14,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.infrastructure.db import DATABASE_URL
 
-# Пути на которых применяется middleware
 IDEMPOTENCY_PATHS = ["/api/payments/retry-demo", "/api/payments/pay"]
 
 engine = create_async_engine(DATABASE_URL)
@@ -59,16 +58,13 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         - обработайте кейс конкурентных одинаковых ключей
           (уникальный индекс + retry/select existing).
         """
-        # 1) Пропускаем не-POST запросы и пути не из whitelist
         if request.method != "POST" or request.url.path not in IDEMPOTENCY_PATHS:
             return await call_next(request)
 
-        # 2) Читаем Idempotency-Key из заголовка
         idempotency_key = request.headers.get("Idempotency-Key")
         if not idempotency_key:
             return await call_next(request)
 
-        # 3) Читаем тело запроса и считаем hash
         raw_body = await request.body()
         request_hash = self.build_request_hash(raw_body)
         request_method = request.method
@@ -76,7 +72,6 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         expires_at = datetime.utcnow() + timedelta(seconds=self.ttl_seconds)
 
         async with AsyncSessionLocal() as session:
-            # 4) Проверяем существующую запись
             result = await session.execute(
                 text("""
                     SELECT id, status, request_hash, status_code, response_body
@@ -94,27 +89,22 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             existing = result.fetchone()
 
             if existing:
-                # Ключ уже есть
                 if existing.request_hash != request_hash:
-                    # Тот же ключ но другой payload — 409 Conflict
                     return JSONResponse(
                         status_code=409,
                         content={"detail": "Idempotency key reused with different payload"},
                     )
                 if existing.status == "completed":
-                    # Уже выполнен — возвращаем кэш
                     return JSONResponse(
                         status_code=existing.status_code,
                         content=existing.response_body,
                         headers={"X-Idempotency-Replayed": "true"},
                     )
-                # Статус processing — запрос ещё выполняется
                 return JSONResponse(
                     status_code=409,
                     content={"detail": "Request is already being processed"},
                 )
             else:
-                # Создаём новую запись processing
                 try:
                     await session.execute(
                         text("""
@@ -134,22 +124,18 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                     )
                     await session.commit()
                 except Exception:
-                    # Конкурентный запрос уже создал запись — откатываемся
                     await session.rollback()
                     return JSONResponse(
                         status_code=409,
                         content={"detail": "Concurrent request with same key"},
                     )
 
-        # 5) Выполняем downstream запрос
-        # Восстанавливаем тело запроса для следующего обработчика
         async def receive():
             return {"type": "http.request", "body": raw_body}
 
         request._receive = receive
         response = await call_next(request)
 
-        # 6) Читаем тело ответа
         response_body_bytes = b""
         async for chunk in response.body_iterator:
             response_body_bytes += chunk
@@ -159,7 +145,6 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         except Exception:
             response_body_json = {"raw": response_body_bytes.decode()}
 
-        # 7) Сохраняем ответ в idempotency_keys
         async with AsyncSessionLocal() as session:
             await session.execute(
                 text("""

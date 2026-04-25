@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.infrastructure.redis_client import get_redis
 from app.infrastructure.cache_keys import catalog_key, order_card_key
 
-CATALOG_TTL = 60      # секунд
-ORDER_CARD_TTL = 30   # секунд
+CATALOG_TTL = 60      
+ORDER_CARD_TTL = 30   
 
 class CacheService:
     """
@@ -38,7 +38,7 @@ class CacheService:
             if cached:
                 return json.loads(cached)
 
-        # Cache miss — загружаем из БД
+        # Cache miss 
         result = await self.db.execute(
             text("""
                 SELECT
@@ -84,7 +84,7 @@ class CacheService:
                 data["source"] = "cache"
                 return data
 
-        # Cache miss — загружаем из БД
+        # Cache miss 
         result = await self.db.execute(
             text("""
                 SELECT id, user_id, status, total_amount, created_at
@@ -123,7 +123,6 @@ class CacheService:
         }
 
         if use_cache:
-            # Сохраняем без поля source
             to_cache = {k: v for k, v in data.items() if k != "source"}
             await self.redis.set(key, json.dumps(to_cache), ex=ORDER_CARD_TTL)
 

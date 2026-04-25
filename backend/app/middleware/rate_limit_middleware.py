@@ -46,20 +46,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Заглушка: ограничение пока не применяется.
         # TODO: заменить на полноценную реализацию.
-        # 1) Применяем только к платёжным endpoints
         if request.method != "POST" or request.url.path not in RATE_LIMIT_PATHS:
             return await call_next(request)
 
-        # 2) Определяем subject — IP клиента
         client_ip = request.client.host if request.client else "unknown"
         subject = client_ip
         key = payment_rate_limit_key(subject)
 
-        # 3) Redis INCR + EXPIRE
         redis = get_redis()
         count = await redis.incr(key)
         if count == 1:
-            # Первый запрос в окне — устанавливаем TTL
             await redis.expire(key, self.window_seconds)
 
         remaining = max(0, self.limit_per_window - count)
@@ -75,7 +71,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 },
             )
 
-        # 4) Выполняем запрос и добавляем заголовки
         response = await call_next(request)
         response.headers["X-RateLimit-Limit"] = str(self.limit_per_window)
         response.headers["X-RateLimit-Remaining"] = str(remaining)

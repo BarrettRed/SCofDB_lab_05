@@ -28,7 +28,5 @@ class CacheInvalidationEventBus:
         self.redis = get_redis()
 
     async def publish_order_updated(self, event: OrderUpdatedEvent) -> None:
-        # Инвалидируем карточку заказа
         await self.redis.delete(order_card_key(event.order_id))
-        # Инвалидируем каталог (total_amount влияет на агрегаты)
         await self.redis.delete(catalog_key())

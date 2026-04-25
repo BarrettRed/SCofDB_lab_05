@@ -25,7 +25,6 @@ async def test_order_card_is_fresh_after_event_invalidation():
     """
     from app.main import app
 
-    # Создаём тестовый заказ
     user_id = uuid.uuid4()
     order_id = uuid.uuid4()
     original_amount = 500.00
@@ -45,12 +44,10 @@ async def test_order_card_is_fresh_after_event_invalidation():
     transport = ASGITransport(app=app)
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # 1) Прогреваем кэш
         resp1 = await client.get(f"/api/cache-demo/orders/{order_id}/card?use_cache=true")
         assert resp1.status_code == 200
         assert resp1.json()["total_amount"] == original_amount
 
-        # 2) Изменяем заказ С инвалидацией кэша через событие
         resp_mutate = await client.post(
             f"/api/cache-demo/orders/{order_id}/mutate-with-event-invalidation",
             json={"new_total_amount": new_amount},
@@ -58,22 +55,19 @@ async def test_order_card_is_fresh_after_event_invalidation():
         assert resp_mutate.status_code == 200
         assert resp_mutate.json()["cache_invalidated"] is True
 
-        # 3) Повторный запрос — кэш инвалидирован, получаем свежие данные из БД
         resp2 = await client.get(f"/api/cache-demo/orders/{order_id}/card?use_cache=true")
         assert resp2.status_code == 200
         fresh_amount = resp2.json()["total_amount"]
 
-    print(f"\n✅ EVENT INVALIDATION DEMO:")
+    print(f"\n EVENT INVALIDATION DEMO:")
     print(f"Оригинальная сумма: {original_amount}")
     print(f"Новая сумма в БД:   {new_amount}")
     print(f"Сумма после инвалидации: {fresh_amount}")
     print(f"Данные свежие: {fresh_amount == new_amount}")
 
-    # 4) Проверяем что получили свежие данные
     assert fresh_amount == new_amount, \
         f"Ожидали свежие данные ({new_amount}), получили {fresh_amount}"
 
-    # Очистка
     async with AsyncSessionLocal() as session:
         async with session.begin():
             await session.execute(text("DELETE FROM orders WHERE id = :id"), {"id": str(order_id)})

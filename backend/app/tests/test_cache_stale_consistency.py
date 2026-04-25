@@ -25,7 +25,6 @@ async def test_stale_order_card_when_db_updated_without_invalidation():
     """
     from app.main import app
 
-    # Создаём тестовый заказ
     user_id = uuid.uuid4()
     order_id = uuid.uuid4()
     original_amount = 500.00
@@ -45,12 +44,10 @@ async def test_stale_order_card_when_db_updated_without_invalidation():
     transport = ASGITransport(app=app)
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # 1) Прогреваем кэш
         resp1 = await client.get(f"/api/cache-demo/orders/{order_id}/card?use_cache=true")
         assert resp1.status_code == 200
         cached_amount = resp1.json()["total_amount"]
 
-        # 2) Изменяем заказ в БД БЕЗ инвалидации кэша
         resp_mutate = await client.post(
             f"/api/cache-demo/orders/{order_id}/mutate-without-invalidation",
             json={"new_total_amount": new_amount},
@@ -58,23 +55,20 @@ async def test_stale_order_card_when_db_updated_without_invalidation():
         assert resp_mutate.status_code == 200
         assert resp_mutate.json()["cache_invalidated"] is False
 
-        # 3) Повторный запрос — получаем stale данные из кэша
         resp2 = await client.get(f"/api/cache-demo/orders/{order_id}/card?use_cache=true")
         assert resp2.status_code == 200
         stale_amount = resp2.json()["total_amount"]
 
-    print(f"\n⚠️ STALE CACHE DEMO:")
+    print(f"\nSTALE CACHE DEMO:")
     print(f"Оригинальная сумма: {original_amount}")
     print(f"Новая сумма в БД:   {new_amount}")
     print(f"Сумма из кэша:      {stale_amount}")
     print(f"Кэш устарел: {stale_amount != new_amount}")
 
-    # 4) Проверяем что кэш вернул старые данные
     assert stale_amount == original_amount, \
         f"Ожидали stale данные ({original_amount}), получили {stale_amount}"
     assert stale_amount != new_amount, "Кэш должен содержать устаревшие данные"
 
-    # Очистка
     async with AsyncSessionLocal() as session:
         async with session.begin():
             await session.execute(text("DELETE FROM orders WHERE id = :id"), {"id": str(order_id)})
