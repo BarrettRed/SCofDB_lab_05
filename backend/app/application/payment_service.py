@@ -59,8 +59,44 @@ class PaymentService:
             OrderAlreadyPaidError: если заказ уже оплачен
         """
         # TODO: Реализовать логику оплаты БЕЗ блокировок
-        raise NotImplementedError("TODO: Реализовать PaymentService.pay_order_unsafe")
+        # raise NotImplementedError("TODO: Реализовать PaymentService.pay_order_unsafe")
+        async with self.session.begin():
+            # 1. Читаем статус БЕЗ блокировки
+            result = await self.session.execute(
+                text("SELECT status FROM orders WHERE id = :order_id"),
+                {"order_id": str(order_id)},
+            )
+            row = result.fetchone()
 
+            if not row:
+                raise OrderNotFoundError(order_id)
+
+            if row.status != "created":
+                raise OrderAlreadyPaidError(order_id)
+
+            # Задержка чтобы обе транзакции успели прочитать статус
+            # прежде чем одна из них запишет — это воспроизводит race condition
+            import asyncio
+            await asyncio.sleep(0.1)
+
+            await self.session.execute(
+                text("""
+                    UPDATE orders SET status = 'paid'
+                    WHERE id = :order_id AND status = 'created'
+                """),
+                {"order_id": str(order_id)},
+            )
+
+            await self.session.execute(
+                text("""
+                    INSERT INTO order_status_history (id, order_id, status, changed_at)
+                    VALUES (gen_random_uuid(), :order_id, 'paid', NOW())
+                """),
+                {"order_id": str(order_id)},
+            )
+
+        return {"order_id": str(order_id), "status": "paid"}
+    
     async def pay_order_safe(self, order_id: uuid.UUID) -> dict:
         """
         БЕЗОПАСНАЯ реализация оплаты заказа.
@@ -108,8 +144,46 @@ class PaymentService:
             OrderAlreadyPaidError: если заказ уже оплачен
         """
         # TODO: Реализовать логику оплаты С блокировками
-        raise NotImplementedError("TODO: Реализовать PaymentService.pay_order_safe")
+        # raise NotImplementedError("TODO: Реализовать PaymentService.pay_order_safe")
+        async with self.session.begin():
+            await self.session.execute(
+                text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            )
 
+            result = await self.session.execute(
+                text("""
+                    SELECT status FROM orders
+                    WHERE id = :order_id FOR UPDATE
+                """),
+                {"order_id": str(order_id)},
+            )
+            row = result.fetchone()
+
+            if not row:
+                raise OrderNotFoundError(order_id)
+
+            if row.status != "created":
+                raise OrderAlreadyPaidError(order_id)
+
+            await self.session.execute(
+                text("""
+                    UPDATE orders SET status = 'paid'
+                    WHERE id = :order_id AND status = 'created'
+                """),
+                {"order_id": str(order_id)},
+            )
+
+            # Пишем в историю вручную — триггера нет
+            await self.session.execute(
+                text("""
+                    INSERT INTO order_status_history (id, order_id, status, changed_at)
+                    VALUES (gen_random_uuid(), :order_id, 'paid', NOW())
+                """),
+                {"order_id": str(order_id)},
+            )
+
+        return {"order_id": str(order_id), "status": "paid"}
+    
     async def get_payment_history(self, order_id: uuid.UUID) -> list[dict]:
         """
         Получить историю оплат для заказа.
@@ -130,4 +204,22 @@ class PaymentService:
             Список словарей с записями об оплате
         """
         # TODO: Реализовать получение истории оплат
-        raise NotImplementedError("TODO: Реализовать PaymentService.get_payment_history")
+        # raise NotImplementedError("TODO: Реализовать PaymentService.get_payment_history")
+        result = await self.session.execute(
+            text("""
+                SELECT id, order_id, status, changed_at
+                FROM order_status_history
+                WHERE order_id = :order_id AND status = 'paid'
+                ORDER BY changed_at
+            """),
+            {"order_id": str(order_id)},
+        )
+        return [
+            {
+                "id": str(row.id),
+                "order_id": str(row.order_id),
+                "status": row.status,
+                "changed_at": str(row.changed_at),
+            }
+            for row in result.fetchall()
+        ]

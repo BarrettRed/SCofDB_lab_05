@@ -3,7 +3,13 @@
 from typing import Callable
 
 from fastapi import Request, Response
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+
+from app.infrastructure.redis_client import get_redis
+from app.infrastructure.cache_keys import payment_rate_limit_key
+
+RATE_LIMIT_PATHS = ["/api/payments/retry-demo", "/api/payments/pay"]
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -40,4 +46,38 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Заглушка: ограничение пока не применяется.
         # TODO: заменить на полноценную реализацию.
-        return await call_next(request)
+        # 1) Применяем только к платёжным endpoints
+        if request.method != "POST" or request.url.path not in RATE_LIMIT_PATHS:
+            return await call_next(request)
+
+        # 2) Определяем subject — IP клиента
+        client_ip = request.client.host if request.client else "unknown"
+        subject = client_ip
+        key = payment_rate_limit_key(subject)
+
+        # 3) Redis INCR + EXPIRE
+        redis = get_redis()
+        count = await redis.incr(key)
+        if count == 1:
+            # Первый запрос в окне — устанавливаем TTL
+            await redis.expire(key, self.window_seconds)
+
+        remaining = max(0, self.limit_per_window - count)
+
+        if count > self.limit_per_window:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many requests. Please try again later."},
+                headers={
+                    "X-RateLimit-Limit": str(self.limit_per_window),
+                    "X-RateLimit-Remaining": "0",
+                    "Retry-After": str(self.window_seconds),
+                },
+            )
+
+        # 4) Выполняем запрос и добавляем заголовки
+        response = await call_next(request)
+        response.headers["X-RateLimit-Limit"] = str(self.limit_per_window)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        return response
+
